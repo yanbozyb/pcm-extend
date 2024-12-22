@@ -882,7 +882,7 @@ void display_bandwidth_csv(PCM *m, memdata_t *md, uint64 /*elapsedTime*/, const 
                cout << "System,System,System\n";
            },
            []() {
-               cout << "Read,Write,Memory\n";
+               cout << "Mem Read (MB/s),Mem Write (MB/s),Memory (MB/s)\n";
            },
            [&]() {
                cout << setw(10) << sysReadDRAM + sysReadPMM << ','
