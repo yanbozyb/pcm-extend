@@ -8,6 +8,8 @@
   \brief Example of using CPU counters: implements a performance counter monitoring utility for memory controller channels and DIMMs (ranks) + PMM memory traffic
   */
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #ifdef _MSC_VER
 #include <windows.h>
 #include "windows/windriver.h"
@@ -1334,6 +1336,45 @@ public:
     }
 };
 
+void getMemUsage()
+{
+#define NUM_KB (1024)
+#define NUM_GB (1024 * 1024 * 1024)
+
+    long long totalMem = 0, freeMem = 0, buffers = 0, cached = 0, avaMem = 0;
+
+    ifstream meminfo("/proc/meminfo");
+    string line;
+
+    while (std::getline(meminfo, line))
+    {
+        istringstream iss(line);
+        string key;
+        long value;
+        string unit;
+
+        iss >> key >> value >> unit;
+
+        if (unit == "kB") value *= NUM_KB;
+
+        if (key == "MemTotal:") totalMem = value;
+        else if (key == "MemFree:") freeMem = value;
+        else if (key == "Buffers:") buffers = value;
+        else if (key == "Cached:") cached = value;
+        else if (key == "MemAvailable:") avaMem = value;
+    }
+
+    long long usedMem = totalMem - avaMem;
+
+    cout << "->\n";
+    cout << "|-- Total Physical Memory: " << totalMem / NUM_GB << " GB\n";
+    cout << "|-- Free Memory: " << freeMem / NUM_GB << " GB\n";
+    cout << "|-- Buffer/Cache: " << (buffers + cached) / NUM_GB << " GB\n";
+    cout << "|-- Used Physical Memory: " << usedMem / NUM_GB << " GB\n";
+    cout << "|-- Memory Util: " << (static_cast<double>(usedMem) / totalMem) * 100 << "%\n";
+
+}
+
 #ifndef UNIT_TEST
 
 PCM_MAIN_NOTHROW;
@@ -1628,14 +1669,13 @@ int mainThrows(int argc, char * argv[])
         }
 
         if (!csv) {
-          //cout << "Time elapsed: " << dec << fixed << AfterTime-BeforeTime << " ms\n";
-          //cout << "Called sleep function for " << dec << fixed << delay_ms << " ms\n";
+            getMemUsage();
         }
 
         if(rankA >= 0 || rankB >= 0)
-          calculate_bandwidth_rank(m,BeforeState, AfterState, AfterTime - BeforeTime, csv, csvheader, no_columns, rankA, rankB);
+            calculate_bandwidth_rank(m,BeforeState, AfterState, AfterTime - BeforeTime, csv, csvheader, no_columns, rankA, rankB);
         else
-          calculate_bandwidth(m,BeforeState,AfterState,AfterTime-BeforeTime,csv,csvheader, no_columns, metrics,
+            calculate_bandwidth(m,BeforeState,AfterState,AfterTime-BeforeTime,csv,csvheader, no_columns, metrics,
                 show_channel_output, print_update, SPR_CHA_CXL_Event_Count);
 
         swap(BeforeTime, AfterTime);
