@@ -447,6 +447,60 @@ void printSocketBWFooter(PCM *m, uint32 no_columns, uint32 skt, const memdata_t 
     cout << "\n";
 }
 
+#define NUM_KB (1024)
+#define NUM_GB (1024 * 1024 * 1024)
+
+static inline void print_mem_usage(bool enable_csv, const CsvOutputType outputType = Data)
+{
+    long long totalMem = 0, freeMem = 0, buffers = 0, cached = 0, avaMem = 0, usedMem = 0;
+
+    ifstream meminfo("/proc/meminfo");
+    string line;
+
+    while (std::getline(meminfo, line))
+    {
+        istringstream iss(line);
+        string key;
+        long value;
+        string unit;
+
+        iss >> key >> value >> unit;
+
+        if (unit == "kB") value *= NUM_KB;
+
+        if (key == "MemTotal:") totalMem = value;
+        else if (key == "MemFree:") freeMem = value;
+        else if (key == "Buffers:") buffers = value;
+        else if (key == "Cached:") cached = value;
+        else if (key == "MemAvailable:") avaMem = value;
+    }
+
+    usedMem = totalMem - avaMem;
+
+    if (enable_csv) {
+        choose(outputType,
+           []() {
+               cout << "System,System,System";
+           },
+           []() {
+               cout << "TotalMem (GB),UsedMem (GB),MemUtil";
+           },
+           [&]() {
+               cout << setw(6) << totalMem / NUM_GB << ','
+                    << setw(6) << usedMem / NUM_GB << ','
+                    << setw(6) << (static_cast<double>(usedMem) / totalMem) * 100 << "%,";
+            }
+        );
+    } else {
+        cout << "->\n";
+        cout << "|-- Total Physical Memory: " << totalMem / NUM_GB << " GB\n";
+        cout << "|-- Free Memory: " << freeMem / NUM_GB << " GB\n";
+        cout << "|-- Buffer/Cache: " << (buffers + cached) / NUM_GB << " GB\n";
+        cout << "|-- Used Physical Memory: " << usedMem / NUM_GB << " GB\n";
+        cout << "|-- Memory Util: " << (static_cast<double>(usedMem) / totalMem) * 100 << "%\n";
+    }
+}
+
 void display_bandwidth(PCM *m, memdata_t *md, const uint32 no_columns, const bool show_channel_output, const bool print_update, const float CXL_Read_BW)
 {
     float sysReadDRAM = 0.0, sysWriteDRAM = 0.0, sysReadPMM = 0.0, sysWritePMM = 0.0;
@@ -458,6 +512,7 @@ void display_bandwidth(PCM *m, memdata_t *md, const uint32 no_columns, const boo
     if (print_update)
         clear_screen();
 
+    print_mem_usage(false);
     while (skt < numSockets)
     {
         auto printHBM = [&]()
@@ -593,6 +648,7 @@ void display_bandwidth_csv(PCM *m, memdata_t *md, uint64 /*elapsedTime*/, const 
 {
     const uint32 numSockets = m->getNumSockets();
     printDateForCSV(outputType);
+    print_mem_usage(true, outputType);
 
     float sysReadDRAM = 0.0, sysWriteDRAM = 0.0, sysReadPMM = 0.0, sysWritePMM = 0.0;
 
@@ -884,7 +940,7 @@ void display_bandwidth_csv(PCM *m, memdata_t *md, uint64 /*elapsedTime*/, const 
                cout << "System,System,System\n";
            },
            []() {
-               cout << "Mem Read (MB/s),Mem Write (MB/s),Memory (MB/s)\n";
+               cout << "SysMem Read (MB/s),SysMem Write (MB/s),SysMem Total (MB/s)\n";
            },
            [&]() {
                cout << setw(10) << sysReadDRAM + sysReadPMM << ','
@@ -1336,45 +1392,6 @@ public:
     }
 };
 
-void getMemUsage()
-{
-#define NUM_KB (1024)
-#define NUM_GB (1024 * 1024 * 1024)
-
-    long long totalMem = 0, freeMem = 0, buffers = 0, cached = 0, avaMem = 0;
-
-    ifstream meminfo("/proc/meminfo");
-    string line;
-
-    while (std::getline(meminfo, line))
-    {
-        istringstream iss(line);
-        string key;
-        long value;
-        string unit;
-
-        iss >> key >> value >> unit;
-
-        if (unit == "kB") value *= NUM_KB;
-
-        if (key == "MemTotal:") totalMem = value;
-        else if (key == "MemFree:") freeMem = value;
-        else if (key == "Buffers:") buffers = value;
-        else if (key == "Cached:") cached = value;
-        else if (key == "MemAvailable:") avaMem = value;
-    }
-
-    long long usedMem = totalMem - avaMem;
-
-    cout << "->\n";
-    cout << "|-- Total Physical Memory: " << totalMem / NUM_GB << " GB\n";
-    cout << "|-- Free Memory: " << freeMem / NUM_GB << " GB\n";
-    cout << "|-- Buffer/Cache: " << (buffers + cached) / NUM_GB << " GB\n";
-    cout << "|-- Used Physical Memory: " << usedMem / NUM_GB << " GB\n";
-    cout << "|-- Memory Util: " << (static_cast<double>(usedMem) / totalMem) * 100 << "%\n";
-
-}
-
 #ifndef UNIT_TEST
 
 PCM_MAIN_NOTHROW;
@@ -1669,7 +1686,8 @@ int mainThrows(int argc, char * argv[])
         }
 
         if (!csv) {
-            getMemUsage();
+            //cout << "Time elapsed: " << dec << fixed << AfterTime-BeforeTime << " ms\n";
+            //cout << "Called sleep function for " << dec << fixed << delay_ms << " ms\n";
         }
 
         if(rankA >= 0 || rankB >= 0)
