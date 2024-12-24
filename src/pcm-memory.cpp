@@ -68,6 +68,9 @@ typedef struct memdata {
     float EDC_Wr_socket_chan[max_sockets][max_edc_channels]{};
     float EDC_Rd_socket[max_sockets]{};
     float EDC_Wr_socket[max_sockets]{};
+    // TODO: add pre sockect statistics
+    // currenly we use total CPU usage as utilization for each socket
+    float cpuUtil[max_sockets]{}; 
     uint64 partial_write[max_sockets]{};
     ServerUncoreMemoryMetrics metrics{};
 } memdata_t;
@@ -513,6 +516,9 @@ void display_bandwidth(PCM *m, memdata_t *md, const uint32 no_columns, const boo
         clear_screen();
 
     print_mem_usage(false);
+    // TODO: print CPU util by soekcts
+    // just print socket 0 here that currently aggregate all sockets
+    cout << "|-- CPU Util: " << md->cpuUtil[skt] << "%\n";
     while (skt < numSockets)
     {
         auto printHBM = [&]()
@@ -994,6 +1000,7 @@ void calculate_bandwidth(PCM *m,
         md.NM_hit_rate[skt] = 0.0;
         md.EDC_Rd_socket[skt] = 0.0;
         md.EDC_Wr_socket[skt] = 0.0;
+        md.cpuUtil[skt] = 0.0;
         md.partial_write[skt] = 0;
 		for (uint32 i = 0; i < max_imc_controllers; ++i)
 		{
@@ -1022,6 +1029,9 @@ void calculate_bandwidth(PCM *m,
     {
         const uint32 numChannels1 = (uint32)m->getMCChannels(skt, 0); // number of channels in the first controller
 
+        double cpuTotalDelta = (uncState2[skt].cpuUsedTSC + uncState2[skt].cpuIdleTSC) - (uncState1[skt].cpuUsedTSC + uncState1[skt].cpuIdleTSC);
+        double cpuUsedDelta = uncState2[skt].cpuUsedTSC - uncState1[skt].cpuUsedTSC;
+        md.cpuUtil[skt] = (cpuUsedDelta / cpuTotalDelta) * 100.0;
 
         if (m->HBMmemoryTrafficMetricsAvailable())
         {
@@ -1691,9 +1701,9 @@ int mainThrows(int argc, char * argv[])
         }
 
         if(rankA >= 0 || rankB >= 0)
-            calculate_bandwidth_rank(m,BeforeState, AfterState, AfterTime - BeforeTime, csv, csvheader, no_columns, rankA, rankB);
+            calculate_bandwidth_rank(m, BeforeState, AfterState, AfterTime - BeforeTime, csv, csvheader, no_columns, rankA, rankB);
         else
-            calculate_bandwidth(m,BeforeState,AfterState,AfterTime-BeforeTime,csv,csvheader, no_columns, metrics,
+            calculate_bandwidth(m, BeforeState, AfterState, AfterTime - BeforeTime, csv, csvheader, no_columns, metrics,
                 show_channel_output, print_update, SPR_CHA_CXL_Event_Count);
 
         swap(BeforeTime, AfterTime);

@@ -7106,6 +7106,29 @@ bool PCM::isSomeCoreOfflined()
     return !(getNumOnlineCores() == max_num_lcores);
 }
 
+struct CPUUsage {
+    uint64_t user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0, steal = 0;
+};
+
+static CPUUsage getCPUUsage() {
+    std::ifstream file("/proc/stat");
+    std::string line;
+    CPUUsage cpu{};
+
+    while (std::getline(file, line)) {
+        std::istringstream ss(line);
+        std::string label;
+        ss >> label;
+
+        if (label == "cpu") { // first line refers to statistics of all cores
+            ss >> cpu.user >> cpu.nice >> cpu.system >> cpu.idle >> cpu.iowait
+               >> cpu.irq >> cpu.softirq >> cpu.steal;
+            break;
+        }
+    }
+    return cpu;
+}
+
 ServerUncoreCounterState PCM::getServerUncoreCounterState(uint32 socket)
 {
     ServerUncoreCounterState result;
@@ -7203,6 +7226,12 @@ ServerUncoreCounterState PCM::getServerUncoreCounterState(uint32 socket)
     }
     // std::cout << std::flush;
     readAndAggregateEnergyCounters(socket, result);
+
+    // read CPU usage
+    // TODO: sperate data by sockects
+    CPUUsage cpu_usage = getCPUUsage();
+    result.cpuIdleTSC = cpu_usage.idle + cpu_usage.iowait;
+    result.cpuUsedTSC = cpu_usage.user + cpu_usage.nice + cpu_usage.system + cpu_usage.irq + cpu_usage.softirq + cpu_usage.steal;
 
     return result;
 }

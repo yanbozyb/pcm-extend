@@ -3771,6 +3771,8 @@ public:
     std::unordered_map<int, uint64> freeRunningCounter;
     int32 PackageThermalHeadroom;
     uint64 InvariantTSC;    // invariant time stamp counter
+    uint64 cpuIdleTSC; // used for calculating cpu util
+    uint64 cpuUsedTSC;
     friend class PCM;
     template <class CounterStateType>
     friend uint64 getDRAMClocks(uint32 channel, const CounterStateType & before, const CounterStateType & after);
@@ -3826,7 +3828,9 @@ public:
         HACounter{{}},
         EDCCounter{{}},
         PackageThermalHeadroom(0),
-        InvariantTSC(0)
+        InvariantTSC(0),
+        cpuIdleTSC(0),
+        cpuUsedTSC(0)
     {
     }
 };
