@@ -483,10 +483,10 @@ static inline void print_mem_usage(bool enable_csv, const CsvOutputType outputTy
     if (enable_csv) {
         choose(outputType,
            []() {
-               cout << "System,System,System";
+               cout << "System,System,System,";
            },
            []() {
-               cout << "TotalMem (GB),UsedMem (GB),MemUtil";
+               cout << "TotalMem (GB),UsedMem (GB),MemUtil,";
            },
            [&]() {
                cout << setw(6) << totalMem / NUM_GB << ','
@@ -504,6 +504,29 @@ static inline void print_mem_usage(bool enable_csv, const CsvOutputType outputTy
     }
 }
 
+static inline void print_cpu_usage(memdata_t *md, bool enable_csv, const CsvOutputType outputType = Data)
+{
+    uint32 skt = 0;
+
+    if (enable_csv) {
+        choose(outputType,
+           []() {
+               cout << "System,";
+           },
+           []() {
+               cout << "CpuUtil,";
+           },
+           [&]() {
+               cout << setw(6) << md->cpuUtil[skt] << "%,";
+            }
+        );
+    } else {
+        // TODO: print CPU util by soekcts
+        // just print socket 0 here that currently aggregate all sockets
+        cout << "|-- CPU Util: " << md->cpuUtil[skt] << "%\n";
+    }
+}
+
 void display_bandwidth(PCM *m, memdata_t *md, const uint32 no_columns, const bool show_channel_output, const bool print_update, const float CXL_Read_BW)
 {
     float sysReadDRAM = 0.0, sysWriteDRAM = 0.0, sysReadPMM = 0.0, sysWritePMM = 0.0;
@@ -516,9 +539,7 @@ void display_bandwidth(PCM *m, memdata_t *md, const uint32 no_columns, const boo
         clear_screen();
 
     print_mem_usage(false);
-    // TODO: print CPU util by soekcts
-    // just print socket 0 here that currently aggregate all sockets
-    cout << "|-- CPU Util: " << md->cpuUtil[skt] << "%\n";
+    print_cpu_usage(md, false);
     while (skt < numSockets)
     {
         auto printHBM = [&]()
@@ -655,6 +676,7 @@ void display_bandwidth_csv(PCM *m, memdata_t *md, uint64 /*elapsedTime*/, const 
     const uint32 numSockets = m->getNumSockets();
     printDateForCSV(outputType);
     print_mem_usage(true, outputType);
+    print_cpu_usage(md, true, outputType);
 
     float sysReadDRAM = 0.0, sysWriteDRAM = 0.0, sysReadPMM = 0.0, sysWritePMM = 0.0;
 
