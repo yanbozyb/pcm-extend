@@ -21,4 +21,11 @@ if(UNIX)
     # create shared lib example
     add_executable(c_example_shlib ${EXAMPLE_FILE})
     target_link_libraries(c_example_shlib PUBLIC PCM_SHARED PRIVATE Threads::Threads)
+
+    # memory example using static lib
+    set(PCM_EXT_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
+
+    add_executable(c_example_mem c_example_mem.c)
+    target_include_directories(c_example_mem PRIVATE ${PCM_EXT_INCLUDE_DIR})
+    target_link_libraries(c_example_mem PRIVATE PCM_STATIC_SILENT_PUB Threads::Threads dl)
 endif(UNIX)

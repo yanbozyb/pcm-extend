@@ -977,6 +977,285 @@ void display_bandwidth_csv(PCM *m, memdata_t *md, uint64 /*elapsedTime*/, const 
            });
 }
 
+void get_bandwidth(PCM *m,
+    memdata_t *md,
+    const std::vector<ServerUncoreCounterState>& uncState1,
+    const std::vector<ServerUncoreCounterState>& uncState2,
+    const uint64 elapsedTime,
+    const bool csv,
+    bool & csvheader,
+    uint32 no_columns,
+    const ServerUncoreMemoryMetrics & metrics,
+    const bool show_channel_output,
+    const bool print_update,
+    const uint64 SPR_CHA_CXL_Count,
+    bool output)
+{
+    md->metrics = metrics;
+    const auto cpu_family_model = m->getCPUFamilyModel();
+    md->M2M_NM_read_hit_rate_supported = (cpu_family_model == PCM::SKX);
+    md->NM_hit_rate_supported = (cpu_family_model == PCM::ICX);
+    md->BHS_NM = m->nearMemoryMetricsAvailable();
+    md->BHS = md->BHS_NM;
+    static bool mm_once = true;
+    if (metrics == Pmem && md->M2M_NM_read_hit_rate_supported == false && md->NM_hit_rate_supported == true && mm_once)
+    {
+        cerr << "INFO: Use -mm option to monitor NM Memory Mode metrics\n";
+        mm_once = false;
+    }
+    static bool mm_once1 = true;
+    if (metrics == PmemMemoryMode && md->M2M_NM_read_hit_rate_supported == true && md->NM_hit_rate_supported == false && mm_once1)
+    {
+        cerr << "INFO: Use -pmem option to monitor NM Memory Mode metrics\n";
+        mm_once1 = false;
+    }
+
+    for(uint32 skt = 0; skt < max_sockets; ++skt)
+    {
+        md->iMC_Rd_socket[skt] = 0.0;
+        md->iMC_Wr_socket[skt] = 0.0;
+        md->iMC_PMM_Rd_socket[skt] = 0.0;
+        md->iMC_PMM_Wr_socket[skt] = 0.0;
+        md->MemoryMode_Miss_socket[skt] = 0.0;
+        md->MemoryMode_Hit_socket[skt] = 0.0;
+        md->NM_hit_rate[skt] = 0.0;
+        md->EDC_Rd_socket[skt] = 0.0;
+        md->EDC_Wr_socket[skt] = 0.0;
+        md->cpuUtil[skt] = 0.0;
+        md->partial_write[skt] = 0;
+		for (uint32 i = 0; i < max_imc_controllers; ++i)
+		{
+			md->M2M_NM_read_hit_rate[skt][i] = 0.;
+		}
+        for (size_t p = 0; p < ServerUncoreCounterState::maxCXLPorts; ++p)
+        {
+            md->CXLMEM_Rd_socket_port[skt][p] = 0.0;
+            md->CXLMEM_Wr_socket_port[skt][p] = 0.0;
+            md->CXLCACHE_Rd_socket_port[skt][p] = 0.0;
+            md->CXLCACHE_Wr_socket_port[skt][p] = 0.0;
+        }
+    }
+
+    auto toBW = [&elapsedTime](const uint64 nEvents)
+    {
+        return (float)(nEvents * 64 / 1000000.0 / (elapsedTime / 1000.0));
+    };
+
+    auto toRate = [&elapsedTime](const uint64 nEvents)
+    {
+        return (float)(nEvents / (elapsedTime / 1000.0));
+    };
+
+    for(uint32 skt = 0; skt < m->getNumSockets(); ++skt)
+    {
+        const uint32 numChannels1 = (uint32)m->getMCChannels(skt, 0); // number of channels in the first controller
+
+        double cpuTotalDelta = (uncState2[skt].cpuUsedTSC + uncState2[skt].cpuIdleTSC) - (uncState1[skt].cpuUsedTSC + uncState1[skt].cpuIdleTSC);
+        double cpuUsedDelta = uncState2[skt].cpuUsedTSC - uncState1[skt].cpuUsedTSC;
+        md->cpuUtil[skt] = (cpuUsedDelta / cpuTotalDelta) * 100.0;
+
+        if (m->HBMmemoryTrafficMetricsAvailable())
+        {
+            const float scalingFactor = ((float)m->getHBMCASTransferSize()) / float(64.);
+
+            for (uint32 channel = 0; channel < max_edc_channels; ++channel)
+            {
+                if (skipInactiveChannels && getEDCCounter(channel, ServerUncorePMUs::EventPosition::READ, uncState1[skt], uncState2[skt]) == 0.0 && getEDCCounter(channel, ServerUncorePMUs::EventPosition::WRITE, uncState1[skt], uncState2[skt]) == 0.0)
+                {
+                    md->EDC_Rd_socket_chan[skt][channel] = -1.0;
+                    md->EDC_Wr_socket_chan[skt][channel] = -1.0;
+                    continue;
+                }
+
+                md->EDC_Rd_socket_chan[skt][channel] = scalingFactor * toBW(getEDCCounter(channel, ServerUncorePMUs::EventPosition::READ, uncState1[skt], uncState2[skt]));
+                md->EDC_Wr_socket_chan[skt][channel] = scalingFactor * toBW(getEDCCounter(channel, ServerUncorePMUs::EventPosition::WRITE, uncState1[skt], uncState2[skt]));
+
+                md->EDC_Rd_socket[skt] += md->EDC_Rd_socket_chan[skt][channel];
+                md->EDC_Wr_socket[skt] += md->EDC_Wr_socket_chan[skt][channel];
+            }
+        }
+
+        {
+            for (uint32 channel = 0; channel < max_imc_channels; ++channel)
+            {
+                uint64 reads = 0, writes = 0, pmmReads = 0, pmmWrites = 0, memoryModeCleanMisses = 0, memoryModeDirtyMisses = 0;
+                uint64 memoryModeHits = 0;
+                reads = getMCCounter(channel, ServerUncorePMUs::EventPosition::READ, uncState1[skt], uncState2[skt]);
+                writes = getMCCounter(channel, ServerUncorePMUs::EventPosition::WRITE, uncState1[skt], uncState2[skt]);
+                switch (cpu_family_model)
+                {
+                case PCM::GNR:
+                case PCM::GRR:
+                case PCM::SRF:
+                    reads += getMCCounter(channel, ServerUncorePMUs::EventPosition::READ2, uncState1[skt], uncState2[skt]);
+                    writes += getMCCounter(channel, ServerUncorePMUs::EventPosition::WRITE2, uncState1[skt], uncState2[skt]);
+                    break;
+                }
+                if (metrics == Pmem)
+                {
+                    pmmReads = getMCCounter(channel, ServerUncorePMUs::EventPosition::PMM_READ, uncState1[skt], uncState2[skt]);
+                    pmmWrites = getMCCounter(channel, ServerUncorePMUs::EventPosition::PMM_WRITE, uncState1[skt], uncState2[skt]);
+                }
+                else if (metrics == PmemMixedMode || metrics == PmemMemoryMode)
+                {
+                    memoryModeCleanMisses = getMCCounter(channel, ServerUncorePMUs::EventPosition::MM_MISS_CLEAN, uncState1[skt], uncState2[skt]);
+                    memoryModeDirtyMisses = getMCCounter(channel, ServerUncorePMUs::EventPosition::MM_MISS_DIRTY, uncState1[skt], uncState2[skt]);
+                }
+                if (metrics == PmemMemoryMode)
+                {
+                    memoryModeHits = getMCCounter(channel, ServerUncorePMUs::EventPosition::NM_HIT, uncState1[skt], uncState2[skt]);
+                }
+                if (skipInactiveChannels && (reads + writes == 0))
+                {
+                    if ((metrics != Pmem) || (pmmReads + pmmWrites == 0))
+                    {
+                        if ((metrics != PmemMixedMode) || (memoryModeCleanMisses + memoryModeDirtyMisses == 0))
+                        {
+
+                            md->iMC_Rd_socket_chan[skt][channel] = -1.0;
+                            md->iMC_Wr_socket_chan[skt][channel] = -1.0;
+                            continue;
+                        }
+                    }
+                }
+
+                if (metrics != PmemMemoryMode)
+                {
+                    md->iMC_Rd_socket_chan[skt][channel] = toBW(reads);
+                    md->iMC_Wr_socket_chan[skt][channel] = toBW(writes);
+
+                    md->iMC_Rd_socket[skt] += md->iMC_Rd_socket_chan[skt][channel];
+                    md->iMC_Wr_socket[skt] += md->iMC_Wr_socket_chan[skt][channel];
+                }
+
+                if (metrics == Pmem)
+                {
+                    md->iMC_PMM_Rd_socket_chan[skt][channel] = toBW(pmmReads);
+                    md->iMC_PMM_Wr_socket_chan[skt][channel] = toBW(pmmWrites);
+
+                    md->iMC_PMM_Rd_socket[skt] += md->iMC_PMM_Rd_socket_chan[skt][channel];
+                    md->iMC_PMM_Wr_socket[skt] += md->iMC_PMM_Wr_socket_chan[skt][channel];
+
+                    md->M2M_NM_read_hit_rate[skt][(channel < numChannels1) ? 0 : 1] += (float)reads;
+                }
+                else if (metrics == PmemMixedMode)
+                {
+                    md->MemoryMode_Miss_socket_chan[skt][channel] = toBW(memoryModeCleanMisses + 2 * memoryModeDirtyMisses);
+                    md->MemoryMode_Miss_socket[skt] += md->MemoryMode_Miss_socket_chan[skt][channel];
+                }
+                else if (metrics == PmemMemoryMode)
+                {
+                    md->MemoryMode_Miss_socket[skt] += toRate(memoryModeCleanMisses + memoryModeDirtyMisses);
+                    md->MemoryMode_Hit_socket[skt] += toRate(memoryModeHits);
+                }
+                else if (
+                   cpu_family_model != PCM::GNR
+                && cpu_family_model != PCM::SRF
+                && cpu_family_model != PCM::GRR
+                    )
+                {
+                    md->partial_write[skt] += (uint64)(getMCCounter(channel, ServerUncorePMUs::EventPosition::PARTIAL, uncState1[skt], uncState2[skt]) / (elapsedTime / 1000.0));
+                }
+            }
+        }
+        if (metrics == PmemMemoryMode)
+        {
+            const int64 imcReads = getFreeRunningCounter(ServerUncoreCounterState::ImcReads, uncState1[skt], uncState2[skt]);
+            if (imcReads >= 0)
+            {
+                md->iMC_Rd_socket[skt] += toBW(imcReads);
+            }
+            const int64 imcWrites = getFreeRunningCounter(ServerUncoreCounterState::ImcWrites, uncState1[skt], uncState2[skt]);
+            if (imcWrites >= 0)
+            {
+                md->iMC_Wr_socket[skt] += toBW(imcWrites);
+            }
+        }
+        if (metrics == PmemMixedMode || metrics == PmemMemoryMode)
+        {
+            const int64 pmmReads = getFreeRunningCounter(ServerUncoreCounterState::PMMReads, uncState1[skt], uncState2[skt]);
+            if (pmmReads >= 0)
+            {
+                md->iMC_PMM_Rd_socket[skt] += toBW(pmmReads);
+            }
+            else for (uint32 c = 0; c < max_imc_controllers; ++c)
+            {
+                md->iMC_PMM_Rd_socket[skt] += toBW(getM2MCounter(c, ServerUncorePMUs::EventPosition::PMM_READ, uncState1[skt], uncState2[skt]));
+            }
+
+            const int64 pmmWrites = getFreeRunningCounter(ServerUncoreCounterState::PMMWrites, uncState1[skt], uncState2[skt]);
+            if (pmmWrites >= 0)
+            {
+                md->iMC_PMM_Wr_socket[skt] += toBW(pmmWrites);
+            }
+            else for (uint32 c = 0; c < max_imc_controllers; ++c)
+            {
+                md->iMC_PMM_Wr_socket[skt] += toBW(getM2MCounter(c, ServerUncorePMUs::EventPosition::PMM_WRITE, uncState1[skt], uncState2[skt]));;
+            }
+        }
+        if (metrics == Pmem)
+        {
+            for (uint32 c = 0; c < max_imc_controllers; ++c)
+            {
+                if (md->M2M_NM_read_hit_rate[skt][c] != 0.0)
+                {
+                    md->M2M_NM_read_hit_rate[skt][c] = ((float)getM2MCounter(c, ServerUncorePMUs::EventPosition::NM_HIT, uncState1[skt], uncState2[skt])) / md->M2M_NM_read_hit_rate[skt][c];
+                }
+            }
+        }
+        if (md->BHS_NM)
+        {
+            for (uint32 c = 0; c < max_imc_controllers; ++c)
+            {
+                md->MemoryMode_Hit_socket[skt] += toRate(getM2MCounter(c, ServerUncorePMUs::EventPosition::NM_HIT, uncState1[skt], uncState2[skt]));
+                md->MemoryMode_Miss_socket[skt] += toRate(getM2MCounter(c, ServerUncorePMUs::EventPosition::MM_MISS_CLEAN, uncState1[skt], uncState2[skt]));
+                md->MemoryMode_Miss_socket[skt] += toRate(getM2MCounter(c, ServerUncorePMUs::EventPosition::MM_MISS_DIRTY, uncState1[skt], uncState2[skt]));
+            }
+        }
+        const auto all = md->MemoryMode_Miss_socket[skt] + md->MemoryMode_Hit_socket[skt];
+        if ((metrics == PmemMemoryMode || md->BHS_NM == true) && all != 0.0)
+        {
+            md->NM_hit_rate[skt] = md->MemoryMode_Hit_socket[skt] / all;
+        }
+
+        for (size_t p = 0; p < m->getNumCXLPorts(skt); ++p)
+        {
+            if (md->BHS)
+            {
+                md->CXLMEM_Rd_socket_port[skt][p] = toBW(getCXLCMCounter((uint32)p, PCM::EventPosition::CXL_RxC_MEM, uncState1[skt], uncState2[skt]));
+                md->CXLMEM_Wr_socket_port[skt][p] = toBW(getCXLDPCounter((uint32)p, PCM::EventPosition::CXL_TxC_MEM, uncState1[skt], uncState2[skt]));
+                md->CXLCACHE_Rd_socket_port[skt][p] = toBW(getCXLCMCounter((uint32)p, PCM::EventPosition::CXL_RxC_CACHE, uncState1[skt], uncState2[skt]));
+                md->CXLCACHE_Wr_socket_port[skt][p] = toBW(getCXLCMCounter((uint32)p, PCM::EventPosition::CXL_TxC_CACHE, uncState1[skt], uncState2[skt]));
+            }
+            else
+            {
+                md->CXLMEM_Wr_socket_port[skt][p] = CXLBWWrScalingFactor * toBW(getCXLCMCounter((uint32)p, PCM::EventPosition::CXL_TxC_MEM, uncState1[skt], uncState2[skt]));
+                md->CXLCACHE_Wr_socket_port[skt][p] = CXLBWWrScalingFactor * toBW(getCXLCMCounter((uint32)p, PCM::EventPosition::CXL_TxC_CACHE, uncState1[skt], uncState2[skt]));
+            }
+        }
+    }
+
+    const auto CXL_Read_BW = toBW(SPR_CHA_CXL_Count);
+
+    if (output)
+    {
+        if (csv)
+        {
+            if (csvheader)
+            {
+                display_bandwidth_csv(m, md, elapsedTime, show_channel_output, Header1, CXL_Read_BW);
+                display_bandwidth_csv(m, md, elapsedTime, show_channel_output, Header2, CXL_Read_BW);
+                csvheader = false;
+            }
+            display_bandwidth_csv(m, md, elapsedTime, show_channel_output, Data, CXL_Read_BW);
+        }
+        else
+        {
+            display_bandwidth(m, md, no_columns, show_channel_output, print_update, CXL_Read_BW);
+        }
+    }
+}
+
 void calculate_bandwidth(PCM *m,
     const std::vector<ServerUncoreCounterState>& uncState1,
     const std::vector<ServerUncoreCounterState>& uncState2,
@@ -1424,6 +1703,90 @@ public:
     }
 };
 
+#ifdef PCM_STATIC_PUB_LIBRARY
+extern "C" {
+    static std::shared_ptr<std::vector<ServerUncoreCounterState>> gBeforeState;
+    static std::shared_ptr<std::vector<ServerUncoreCounterState>> gAfterState;
+    static uint64_t gBeforeTime = 0;
+    static uint64_t gAfterTime = 0;
+
+    // used for getting bandwidth
+    static ServerUncoreMemoryMetrics g_metrics;
+    static bool g_csv = false, g_csvheader = false, g_show_channel_output = true, g_print_update = false;
+    static uint32 gno_columns = DEFAULT_DISPLAY_COLUMNS;
+    static uint64 g_SPR_CHA_CXL_Event_Count = 0;
+    static null_stream g_nullStream;
+
+    int pcm_c_init()
+    {
+        // must set before PCM instance to avoid output for CPU-related infomation
+        std::cerr.rdbuf(&g_nullStream);
+
+        PCM * m = PCM::getInstance();
+        if (!m) {
+            return -1;
+        }
+
+        const uint32 numSockets = m->getNumSockets();
+        gBeforeState = std::make_shared<std::vector<ServerUncoreCounterState>>(numSockets);
+        gAfterState = std::make_shared<std::vector<ServerUncoreCounterState>>(numSockets);
+        max_imc_channels = (pcm::uint32)m->getMCChannelsPerSocket(); // used by getting bandwidth
+        g_metrics = PartialWrites;
+
+        m->resetPMU();
+        PCM::ErrorCode status = m->programServerUncoreMemoryMetrics(g_metrics, -1, -1);
+        if(status != PCM::Success)
+			return -1;
+        return 0;
+    }
+
+    void pcm_c_start()
+    {
+        PCM * m = PCM::getInstance();
+        readState(*gBeforeState.get());
+        gBeforeTime = m->getTickCount();
+    }
+
+    void pcm_c_print_bandwidth()
+    {
+        PCM * m = PCM::getInstance();
+
+        readState(*gAfterState.get());
+        gAfterTime = m->getTickCount();
+
+        calculate_bandwidth(m, *gBeforeState.get(), *gAfterState.get(),
+            gAfterTime - gBeforeTime, g_csv, g_csvheader, gno_columns, g_metrics,
+            g_show_channel_output, g_print_update, g_SPR_CHA_CXL_Event_Count);
+
+        swap(gBeforeTime, gAfterTime);
+        swap(gBeforeState, gAfterState);
+    }
+
+    void pcm_c_get_bandwidth(memdata_t *md, bool output)
+    {
+        PCM * m = PCM::getInstance();
+
+        readState(*gAfterState.get());
+        gAfterTime = m->getTickCount();
+
+        get_bandwidth(m, md, *gBeforeState.get(), *gAfterState.get(),
+            gAfterTime - gBeforeTime, g_csv, g_csvheader, gno_columns, g_metrics,
+            g_show_channel_output, g_print_update, g_SPR_CHA_CXL_Event_Count, output);
+
+        swap(gBeforeTime, gAfterTime);
+        swap(gBeforeState, gAfterState);
+    }
+
+    void pcm_c_cleanup()
+    {
+        if (PCM::isInitialized()) {
+            PCM::getInstance()->cleanup();
+        }
+    }
+}
+#endif // PCM_STATIC_PUB_LIBRARY
+
+#ifndef PCM_STATIC_PUB_LIBRARY
 #ifndef UNIT_TEST
 
 PCM_MAIN_NOTHROW;
@@ -1742,3 +2105,5 @@ int mainThrows(int argc, char * argv[])
 }
 
 #endif // UNIT_TEST
+
+#endif // PCM_STATIC_PUB_LIBRARY

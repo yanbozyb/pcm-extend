@@ -62,6 +62,16 @@ if(UNIX)  # LINUX, FREE_BSD, APPLE
 
     set_target_properties(PCM_STATIC_SILENT PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+    # libpcm_public.a with -DPCM_SILENT for public use*
+    add_library(PCM_STATIC_SILENT_PUB STATIC ${COMMON_SOURCES} ${UNUX_SOURCES} pcm-memory.cpp)
+    target_compile_options(PCM_STATIC_SILENT_PUB PRIVATE -DPCM_STATIC_PUB_LIBRARY=1)
+    target_compile_definitions(PCM_STATIC_SILENT_PUB PRIVATE
+      $<$<CONFIG:Release>:PCM_SILENT>
+      $<$<CONFIG:MinSizeRel>:PCM_SILENT>
+      $<$<CONFIG:RelWithDebInfo>:PCM_SILENT>
+    )
+    set_target_properties(PCM_STATIC_SILENT_PUB PROPERTIES OUTPUT_NAME pcm_public POSITION_INDEPENDENT_CODE ON)
+
     # libpcm.so
     add_library(PCM_SHARED SHARED pcm-core.cpp)
     target_compile_options(PCM_SHARED PRIVATE -DPCM_SHARED_LIBRARY=1)
