@@ -1702,47 +1702,74 @@ public:
         totalCount = 0;
     }
 };
-
+//#define PCM_STATIC_PUB_LIBRARY
 #ifdef PCM_STATIC_PUB_LIBRARY
 extern "C" {
+    // used for getting channel/control bandwidth (pem-memory)
     static std::shared_ptr<std::vector<ServerUncoreCounterState>> gBeforeState;
     static std::shared_ptr<std::vector<ServerUncoreCounterState>> gAfterState;
+
+    // used to get raw counters (pcm)
+    static std::shared_ptr<std::vector<CoreCounterState>> core_states1, core_states2;
+    static std::shared_ptr<std::vector<SocketCounterState>> skt_state1, skt_state2;
+    static SystemCounterState sys_state1, sys_state2;
+
     static uint64_t gBeforeTime = 0;
     static uint64_t gAfterTime = 0;
 
-    // used for getting bandwidth
+    // used for getting channel/control bandwidth (pem-memory)
     static ServerUncoreMemoryMetrics g_metrics;
     static bool g_csv = false, g_csvheader = false, g_show_channel_output = true, g_print_update = false;
     static uint32 gno_columns = DEFAULT_DISPLAY_COLUMNS;
     static uint64 g_SPR_CHA_CXL_Event_Count = 0;
     static null_stream g_nullStream;
 
+    static uint32 cpu_family_model;
+
     int pcm_c_init()
     {
+        int pid = -1;
+        PCM::ErrorCode status;
+
         // must set before PCM instance to avoid output for CPU-related infomation
         std::cerr.rdbuf(&g_nullStream);
-
         PCM * m = PCM::getInstance();
         if (!m) {
             return -1;
         }
-
+    
+        cpu_family_model = m->getCPUFamilyModel();
         const uint32 numSockets = m->getNumSockets();
+        const uint32 numCores = m->getNumCores();
+        max_imc_channels = (pcm::uint32)m->getMCChannelsPerSocket(); // used by getting bandwidth
         gBeforeState = std::make_shared<std::vector<ServerUncoreCounterState>>(numSockets);
         gAfterState = std::make_shared<std::vector<ServerUncoreCounterState>>(numSockets);
-        max_imc_channels = (pcm::uint32)m->getMCChannelsPerSocket(); // used by getting bandwidth
+        core_states1 = std::make_shared<std::vector<CoreCounterState>>(numCores);
+        core_states2 = std::make_shared<std::vector<CoreCounterState>>(numCores);
+        skt_state1 = std::make_shared<std::vector<SocketCounterState>>(numSockets);
+        skt_state2 = std::make_shared<std::vector<SocketCounterState>>(numSockets);
         g_metrics = PartialWrites;
 
         m->resetPMU();
-        PCM::ErrorCode status = m->programServerUncoreMemoryMetrics(g_metrics, -1, -1);
-        if(status != PCM::Success)
-			return -1;
+        status = m->programServerUncoreMemoryMetrics(g_metrics, -1, -1);
+        if(status != PCM::Success) {
+            cerr << "Program ServerUncore: Access to Intel(r) PCM has denied.\n";
+            return -1;
+        }
+
+        //status = m->program(PCM::DEFAULT_EVENTS, nullptr, false, pid);
+        if (status != PCM::Success) {
+            cerr << "Program Default Events: Access to Intel(r) PCM has denied.\n";
+            return -1;
+        }
+    
         return 0;
     }
 
     void pcm_c_start()
     {
         PCM * m = PCM::getInstance();
+
         readState(*gBeforeState.get());
         gBeforeTime = m->getTickCount();
     }
