@@ -63,7 +63,7 @@ if(UNIX)  # LINUX, FREE_BSD, APPLE
     set_target_properties(PCM_STATIC_SILENT PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
     # libpcm_public.a with -DPCM_SILENT for public use*
-    add_library(PCM_STATIC_SILENT_PUB STATIC ${COMMON_SOURCES} ${UNUX_SOURCES} pcm-memory.cpp)
+    add_library(PCM_STATIC_SILENT_PUB STATIC ${COMMON_SOURCES} ${UNUX_SOURCES} pcm-memory.cpp pcm.cpp)
     target_compile_options(PCM_STATIC_SILENT_PUB PRIVATE -DPCM_STATIC_PUB_LIBRARY=1)
     target_compile_definitions(PCM_STATIC_SILENT_PUB PRIVATE
       $<$<CONFIG:Release>:PCM_SILENT>

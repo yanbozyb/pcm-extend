@@ -1350,6 +1350,8 @@ void print_csv(PCM * m,
     }
 }
 
+
+#ifndef PCM_STATIC_PUB_LIBRARY
 #ifndef UNIT_TEST
 
 PCM_MAIN_NOTHROW;
@@ -1646,3 +1648,5 @@ int mainThrows(int argc, char * argv[])
 }
 
 #endif // UNIT_TEST
+
+#endif // PCM_STATIC_PUB_LIBRARY
